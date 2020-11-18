@@ -1,37 +1,53 @@
 use colored::Colorize;
+use rayon::prelude::*;
+use serde_yaml::Value::Sequence;
 use std::fs;
 use std::io::Write;
+use std::path::PathBuf;
 use std::process::Command;
 use std::process::ExitStatus;
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::Ordering;
 use tempfile::NamedTempFile;
 use walkdir::WalkDir;
-use std::path::PathBuf;
-use serde_yaml::Value::Sequence;
+use std::sync::Arc;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Diagnostics {
-    pub total_files: usize,
-    pub run: u16,
-    pub passed: u16,
-    pub failed: u16,
-    pub no_frontmatter: Vec<PathBuf>,
+    pub total_files: AtomicU32,
+    pub run: AtomicU32,
+    pub passed: AtomicU32,
+    pub failed: AtomicU32,
+    pub no_frontmatter: AtomicU32,
+}
+
+impl Diagnostics {
+    pub fn new() -> Self {
+        Self {
+            total_files: AtomicU32::new(0),
+            run: AtomicU32::new(0),
+            passed: AtomicU32::new(0),
+            failed: AtomicU32::new(0),
+            no_frontmatter: AtomicU32::new(0),
+        }
+    }
 }
 
 pub fn generate_and_run(
     file_to_test: &PathBuf,
     files_to_add: Vec<PathBuf>,
-    diagnostics: &mut Diagnostics,
+    diagnostics: Arc<Diagnostics>,
 ) {
     match generate_final_file_to_test(file_to_test, files_to_add) {
         Ok(file_to_run) => match spawn_node_process(file_to_run) {
             Ok(exit_status) => {
                 if exit_status.success() {
-                    diagnostics.run += 1;
-                    diagnostics.passed += 1;
+                    diagnostics.run.fetch_add(1, Ordering::Relaxed);
+                    diagnostics.passed.fetch_add(1, Ordering::Relaxed);
                     println!("{} {:?}", "Great Success".green(), file_to_test);
                 } else {
-                    diagnostics.run += 1;
-                    diagnostics.failed += 1;
+                    diagnostics.run.fetch_add(1, Ordering::Relaxed);
+                    diagnostics.failed.fetch_add(1, Ordering::Relaxed);
                     eprintln!("{} {:?}", "FAIL".red(), file_to_test);
                 }
             }
@@ -44,7 +60,6 @@ pub fn generate_and_run(
     }
 }
 
-// TODO walk file in parallel using jwalk
 fn walk(root_path: PathBuf) -> walkdir::Result<Vec<PathBuf>> {
     let mut final_paths: Vec<PathBuf> = vec![];
     for entry in WalkDir::new(root_path) {
@@ -90,9 +105,9 @@ pub fn get_include_paths(
     let must_include = &mut vec!["assert.js".to_string(), "sta.js".to_string()];
     includes.append(must_include);
     let mut include_paths: Vec<PathBuf> = vec![];
-    for include in includes {
+    includes.into_iter().for_each(|include| {
         include_paths.push(include_path_root.join(include));
-    }
+    });
     Ok(include_paths)
 }
 
@@ -100,7 +115,6 @@ fn generate_final_file_to_test(
     file_to_test: &PathBuf,
     files_to_add: Vec<PathBuf>,
 ) -> std::io::Result<NamedTempFile> {
-    // TODO do this asynchronously
     let mut contents = String::new();
     for file in files_to_add {
         let file_contents = fs::read_to_string(file)?;
@@ -119,9 +133,11 @@ pub fn spawn_node_process(file: NamedTempFile) -> std::io::Result<ExitStatus> {
     Command::new("node").arg(file.path()).status()
 }
 
-pub fn run_all(test_path: PathBuf, include_path: PathBuf, mut diagnostics: Diagnostics) {
+pub fn run_all(test_path: PathBuf, include_path: PathBuf) {
+    let diagnostics = Arc::new(Diagnostics::new());
+
     let files_to_test = walk(test_path).unwrap();
-    for file in files_to_test {
+    files_to_test.into_par_iter().for_each(|file| {
         let frontmatter = extract_frontmatter(&file);
         match frontmatter {
             Some(f) => match get_serde_value(&f) {
@@ -129,14 +145,14 @@ pub fn run_all(test_path: PathBuf, include_path: PathBuf, mut diagnostics: Diagn
                     Some(includes_value) => {
                         match get_include_paths(includes_value, &include_path) {
                             Ok(include_files) => {
-                                generate_and_run(&file, include_files, &mut diagnostics)
+                                generate_and_run(&file, include_files, diagnostics.clone())
                             }
                             Err(e) => eprintln!("Not able to find {:?} | Err: {}", file, e),
                         }
                     }
                     None => match get_include_paths(&Sequence([].to_vec()), &include_path) {
                         Ok(include_files) => {
-                            generate_and_run(&file, include_files, &mut diagnostics)
+                            generate_and_run(&file, include_files, diagnostics.clone())
                         }
                         Err(e) => eprintln!("Not able to find {:?} | Err: {}", file, e),
                     },
@@ -144,18 +160,26 @@ pub fn run_all(test_path: PathBuf, include_path: PathBuf, mut diagnostics: Diagn
                 Err(e) => eprintln!("Could not get serde value from frontmatter | Err: {}", e),
             },
             None => {
-                diagnostics.no_frontmatter.push(file)
-            },
+                diagnostics.no_frontmatter.fetch_add(1, Ordering::Relaxed);
+            }
         }
-    }
+    });
     println!(
-        "TOTAL: {}, FAILED: {}, PASSED: {}",
-        diagnostics.run.to_string().yellow(),
-        diagnostics.failed.to_string().red(),
-        diagnostics.passed.to_string().green(),
+        "TOTAL: {}, FAILED: {}, PASSED: {}, NO FRONTMATTER: {}",
+        diagnostics.run.load(Ordering::Relaxed).to_string().yellow(),
+        diagnostics.failed.load(Ordering::Relaxed).to_string().red(),
+        diagnostics.passed.load(Ordering::Relaxed).to_string().green(),
+        diagnostics.no_frontmatter.load(Ordering::Relaxed).to_string().cyan(),
     );
-    println!("File(s) for which no frontmatter was found: {}", diagnostics.no_frontmatter.len().to_string().cyan());
-    for file in diagnostics.no_frontmatter {
-        println!("{:?}", file);
+}
+
+#[cfg(test)]
+mod test {
+    use static_assertions::assert_impl_all;
+    use super::Diagnostics;
+
+    #[test]
+    fn test() {
+        assert_impl_all!(Diagnostics: std::marker::Send, std::marker::Sync);
     }
 }
