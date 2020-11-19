@@ -1,7 +1,6 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 
 use sonic262::run_all;
-use sonic262::Diagnostics;
 
 use std::path::PathBuf;
 
@@ -11,7 +10,6 @@ fn benchmark(c: &mut Criterion) {
             run_all(
                 PathBuf::from(black_box("./benches/fixtures/single.js")),
                 PathBuf::from(black_box("./benches/fixtures/harness")),
-                Diagnostics::default()
             )
         })
     });
@@ -22,7 +20,6 @@ fn benchmark(c: &mut Criterion) {
             run_all(
                 PathBuf::from(black_box("./benches/fixtures/multiple")),
                 PathBuf::from(black_box("./benches/fixtures/harness")),
-                Diagnostics::default()
             )
         })
     });

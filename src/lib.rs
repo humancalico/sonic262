@@ -1,3 +1,4 @@
+use color_eyre::eyre::Result;
 // TODO use a color library with no runtime dependency like yansi
 use colored::Colorize;
 use rayon::prelude::*;
@@ -9,21 +10,21 @@ use std::process::Command;
 use std::process::ExitStatus;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use tempfile::NamedTempFile;
 use walkdir::WalkDir;
-use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct Diagnostics {
-    pub total_files: AtomicU32,
-    pub run: AtomicU32,
-    pub passed: AtomicU32,
-    pub failed: AtomicU32,
-    pub no_frontmatter: AtomicU32,
+    total_files: AtomicU32,
+    run: AtomicU32,
+    passed: AtomicU32,
+    failed: AtomicU32,
+    no_frontmatter: AtomicU32,
 }
 
 impl Diagnostics {
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self {
             total_files: AtomicU32::new(0),
             run: AtomicU32::new(0),
@@ -61,7 +62,7 @@ pub fn generate_and_run(
     }
 }
 
-fn walk(root_path: PathBuf) -> walkdir::Result<Vec<PathBuf>> {
+fn walk(root_path: PathBuf) -> Result<Vec<PathBuf>> {
     let mut final_paths: Vec<PathBuf> = vec![];
     for entry in WalkDir::new(root_path) {
         // FIXME possible unecessary clone
@@ -114,7 +115,7 @@ pub fn get_include_paths(
 fn generate_final_file_to_test(
     file_to_test: &PathBuf,
     files_to_add: Vec<PathBuf>,
-) -> std::io::Result<NamedTempFile> {
+) -> Result<NamedTempFile> {
     let mut contents = String::new();
     for file in files_to_add {
         let file_contents = fs::read_to_string(file)?;
@@ -133,10 +134,9 @@ pub fn spawn_node_process(file: NamedTempFile) -> std::io::Result<ExitStatus> {
     Command::new("node").arg(file.path()).status()
 }
 
-pub fn run_all(test_path: PathBuf, include_path: PathBuf) {
+pub fn run_all(test_path: PathBuf, include_path: PathBuf) -> Result<()> {
+    let files_to_test = walk(test_path)?;
     let diagnostics = Arc::new(Diagnostics::new());
-
-    let files_to_test = walk(test_path).unwrap();
     files_to_test.into_par_iter().for_each(|file| {
         let frontmatter = extract_frontmatter(&file);
         match frontmatter {
@@ -168,15 +168,26 @@ pub fn run_all(test_path: PathBuf, include_path: PathBuf) {
         "TOTAL: {}, FAILED: {}, PASSED: {}, NO FRONTMATTER: {}",
         diagnostics.run.load(Ordering::Relaxed).to_string().yellow(),
         diagnostics.failed.load(Ordering::Relaxed).to_string().red(),
-        diagnostics.passed.load(Ordering::Relaxed).to_string().green(),
-        diagnostics.no_frontmatter.load(Ordering::Relaxed).to_string().cyan(),
+        diagnostics
+            .passed
+            .load(Ordering::Relaxed)
+            .to_string()
+            .green(),
+        diagnostics
+            .no_frontmatter
+            .load(Ordering::Relaxed)
+            .to_string()
+            .cyan(),
     );
+    Ok(())
 }
+
+//fn store_includes_in_hashmap() -> Result<()> {}
 
 #[cfg(test)]
 mod test {
-    use static_assertions::assert_impl_all;
     use super::Diagnostics;
+    use static_assertions::assert_impl_all;
 
     #[test]
     fn test() {

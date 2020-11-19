@@ -1,4 +1,5 @@
 use clap::Clap;
+use color_eyre::eyre::Result;
 use std::path::PathBuf;
 
 #[derive(Clap)]
@@ -19,14 +20,12 @@ struct Opts {
     // files_to_test: Option<Vec<PathBuf>>,
 }
 
-// TODO maybe use a logging crate instead of doing... this
-fn main() {
+fn main() -> Result<()> {
+    color_eyre::install()?;
     let args = Opts::parse();
     // let files_to_test = args.files_to_test.unwrap();
     let include_path = args.include_path;
     let test_path = args.test_path;
-    // TODO remove unwrap here
 
     sonic262::run_all(test_path, include_path)
-
 }
