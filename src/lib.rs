@@ -1,3 +1,4 @@
+// TODO use a color library with no runtime dependency like yansi
 use colored::Colorize;
 use rayon::prelude::*;
 use serde_yaml::Value::Sequence;
@@ -75,7 +76,6 @@ fn walk(root_path: PathBuf) -> walkdir::Result<Vec<PathBuf>> {
 
 pub fn extract_frontmatter(file_to_test: &PathBuf) -> Option<String> {
     // FIXME remove unwrap
-    // TODO Read asynchronously
     let file_contents = fs::read_to_string(file_to_test).unwrap();
     let yaml_start = file_contents.find("/*---");
     if let Some(start) = yaml_start {
