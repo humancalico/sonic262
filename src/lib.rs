@@ -39,7 +39,7 @@ pub fn generate_and_run(
     file_to_test: &PathBuf,
     files_to_add: Vec<PathBuf>,
     diagnostics: Arc<Diagnostics>,
-    must_include: Arc<String>
+    must_include: Arc<&str>
 ) {
     match generate_final_file_to_test(file_to_test, files_to_add, must_include) {
         Ok(file_to_run) => match spawn_node_process(file_to_run) {
@@ -114,7 +114,7 @@ pub fn get_include_paths(
 fn generate_final_file_to_test(
     file_to_test: &PathBuf,
     files_to_add: Vec<PathBuf>,
-    must_include: Arc<String>
+    must_include: Arc<&str>
 ) -> Result<NamedTempFile> {
     let mut contents = String::new();
     contents.push_str(&*must_include);
@@ -139,7 +139,7 @@ pub fn run_all(test_path: PathBuf, include_path: PathBuf) -> Result<()> {
     let assert = fs::read_to_string(include_path.join("assert.js"))?;
     let sta = fs::read_to_string(include_path.join("sta.js"))?;
     let must_include = format!("{}\n{}\n", assert, sta);
-    let must_include = Arc::new(must_include);
+    let must_include = Arc::new(must_include.as_str());
 
     let files_to_test = walk(test_path)?;
     let diagnostics = Arc::new(Diagnostics::new());
