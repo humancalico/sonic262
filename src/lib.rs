@@ -39,8 +39,9 @@ pub fn generate_and_run(
     file_to_test: &PathBuf,
     files_to_add: Vec<PathBuf>,
     diagnostics: Arc<Diagnostics>,
+    must_include: Arc<String>
 ) {
-    match generate_final_file_to_test(file_to_test, files_to_add) {
+    match generate_final_file_to_test(file_to_test, files_to_add, must_include) {
         Ok(file_to_run) => match spawn_node_process(file_to_run) {
             Ok(exit_status) => {
                 if exit_status.success() {
@@ -102,9 +103,7 @@ pub fn get_include_paths(
     includes_value: &serde_yaml::Value,
     include_path_root: &PathBuf,
 ) -> serde_yaml::Result<Vec<PathBuf>> {
-    let mut includes: Vec<String> = serde_yaml::from_value(includes_value.clone())?;
-    let must_include = &mut vec!["assert.js".to_string(), "sta.js".to_string()];
-    includes.append(must_include);
+    let includes: Vec<String> = serde_yaml::from_value(includes_value.clone())?;
     let mut include_paths: Vec<PathBuf> = vec![];
     includes.into_iter().for_each(|include| {
         include_paths.push(include_path_root.join(include));
@@ -115,8 +114,10 @@ pub fn get_include_paths(
 fn generate_final_file_to_test(
     file_to_test: &PathBuf,
     files_to_add: Vec<PathBuf>,
+    must_include: Arc<String>
 ) -> Result<NamedTempFile> {
     let mut contents = String::new();
+    contents.push_str(&*must_include);
     for file in files_to_add {
         let file_contents = fs::read_to_string(file)?;
         contents.push_str(&file_contents);
@@ -135,6 +136,11 @@ pub fn spawn_node_process(file: NamedTempFile) -> std::io::Result<ExitStatus> {
 }
 
 pub fn run_all(test_path: PathBuf, include_path: PathBuf) -> Result<()> {
+    let assert = fs::read_to_string(include_path.join("assert.js"))?;
+    let sta = fs::read_to_string(include_path.join("sta.js"))?;
+    let must_include = format!("{}\n{}\n", assert, sta);
+    let must_include = Arc::new(must_include);
+
     let files_to_test = walk(test_path)?;
     let diagnostics = Arc::new(Diagnostics::new());
     files_to_test.into_par_iter().for_each(|file| {
@@ -145,14 +151,14 @@ pub fn run_all(test_path: PathBuf, include_path: PathBuf) -> Result<()> {
                     Some(includes_value) => {
                         match get_include_paths(includes_value, &include_path) {
                             Ok(include_files) => {
-                                generate_and_run(&file, include_files, diagnostics.clone())
+                                generate_and_run(&file, include_files, diagnostics.clone(), must_include.clone())
                             }
                             Err(e) => eprintln!("Not able to find {:?} | Err: {}", file, e),
                         }
                     }
                     None => match get_include_paths(&Sequence([].to_vec()), &include_path) {
                         Ok(include_files) => {
-                            generate_and_run(&file, include_files, diagnostics.clone())
+                            generate_and_run(&file, include_files, diagnostics.clone(), must_include.clone())
                         }
                         Err(e) => eprintln!("Not able to find {:?} | Err: {}", file, e),
                     },
