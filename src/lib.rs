@@ -3,16 +3,13 @@ use color_eyre::eyre::Result;
 use colored::Colorize;
 use dashmap::DashMap;
 use rayon::prelude::*;
+use rusty_v8 as v8;
 use serde_yaml::Value::Sequence;
 use std::fs;
-use std::io::Write;
 use std::path::PathBuf;
-use std::process::Command;
-use std::process::ExitStatus;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use tempfile::NamedTempFile;
 use walkdir::WalkDir;
 
 #[derive(Debug)]
@@ -43,19 +40,17 @@ pub fn generate_and_run(
     diagnostics: Arc<Diagnostics>,
 ) {
     match generate_final_file_to_test(file_to_test, include_contents) {
-        Ok(file_to_run) => match spawn_node_process(file_to_run) {
-            Ok(exit_status) => {
-                if exit_status.success() {
-                    diagnostics.run.fetch_add(1, Ordering::Relaxed);
-                    diagnostics.passed.fetch_add(1, Ordering::Relaxed);
-                    println!("{} {:?}", "Great Success".green(), file_to_test);
-                } else {
-                    diagnostics.run.fetch_add(1, Ordering::Relaxed);
-                    diagnostics.failed.fetch_add(1, Ordering::Relaxed);
-                    eprintln!("{} {:?}", "FAIL".red(), file_to_test);
-                }
+        Ok(file_to_run) => match spawn_v8_process(file_to_run) {
+            Some(_) => {
+                diagnostics.run.fetch_add(1, Ordering::Relaxed);
+                diagnostics.passed.fetch_add(1, Ordering::Relaxed);
+                println!("{} {:?}", "Great Success".green(), file_to_test);
             }
-            Err(e) => eprintln!("Failed to execute the file_to_test | Error: {:?}", e),
+            None => {
+                diagnostics.run.fetch_add(1, Ordering::Relaxed);
+                diagnostics.failed.fetch_add(1, Ordering::Relaxed);
+                eprintln!("{} {:?}", "FAIL".red(), file_to_test);
+            }
         },
         Err(e) => eprintln!(
             "Couldn't generate file: {:?} to test | Err: {}",
@@ -132,24 +127,32 @@ pub fn get_contents(
 }
 
 // TODO combine this and get_contents()
-fn generate_final_file_to_test(
-    file_to_test: &PathBuf,
-    mut contents: String,
-) -> Result<NamedTempFile> {
+fn generate_final_file_to_test(file_to_test: &PathBuf, mut contents: String) -> Result<String> {
     let file_to_test_contents = fs::read_to_string(file_to_test)?;
     contents.push_str(&file_to_test_contents);
-    let mut file = tempfile::Builder::new().suffix(".js").tempfile()?;
-    writeln!(file, "{}", contents)?;
-    Ok(file)
+    Ok(contents)
 }
 
-pub fn spawn_node_process(file: NamedTempFile) -> std::io::Result<ExitStatus> {
-    // TODO .status() waits for the command to execute
-    // FIXME currently shows all the errors if node is not able to run the file
-    Command::new("node").arg(file.path()).status()
+pub fn spawn_v8_process(contents: String) -> Option<()> {
+    let isolate = &mut v8::Isolate::new(Default::default());
+
+    let scope = &mut v8::HandleScope::new(isolate);
+    let context = v8::Context::new(scope);
+    let scope = &mut v8::ContextScope::new(scope, context);
+
+    let code = v8::String::new(scope, &contents).unwrap();
+
+    let script = v8::Script::compile(scope, code, None)?;
+    let _result = script.run(scope)?;
+
+    Some(())
 }
 
 pub fn run_all(test_path: PathBuf, include_path: PathBuf) -> Result<()> {
+    let platform = v8::new_default_platform().unwrap();
+    v8::V8::initialize_platform(platform);
+    v8::V8::initialize();
+
     let includes_map: DashMap<String, String> = DashMap::new();
     includes_map.insert(
         "assert".to_string(),
