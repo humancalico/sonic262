@@ -2,6 +2,10 @@
 
 A blazing fast WIP harness for test262 written in Rust.
 
+### Dependencies
+- rust
+- python(2) - for `rusty-v8`
+
 ### Usage:
 
 - Run all test262 tests
