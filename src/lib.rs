@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use walkdir::WalkDir;
+use jwalk::WalkDir;
 
 #[derive(Debug)]
 pub struct Diagnostics {
@@ -62,10 +62,9 @@ pub fn generate_and_run(
 fn walk(root_path: PathBuf) -> Result<Vec<PathBuf>> {
     let mut final_paths: Vec<PathBuf> = vec![];
     for entry in WalkDir::new(root_path) {
-        // FIXME possible unecessary clone
-        let entry_clone = entry?.clone();
-        if entry_clone.file_type().is_file() {
-            final_paths.push(entry_clone.into_path());
+        let entry = entry?;
+        if entry.file_type().is_file() {
+            final_paths.push(entry.path());
         } else {
         }
     }
