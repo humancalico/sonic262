@@ -2,6 +2,8 @@ use color_eyre::eyre::Result;
 // TODO use a color library with no runtime dependency like yansi
 use colored::Colorize;
 use dashmap::DashMap;
+use deno_core::error::JsError;
+use jwalk::WalkDir;
 use rayon::prelude::*;
 use rusty_v8 as v8;
 use serde_yaml::Value::Sequence;
@@ -10,7 +12,6 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use jwalk::WalkDir;
 
 #[derive(Debug)]
 pub struct Diagnostics {
@@ -40,16 +41,17 @@ pub fn generate_and_run(
     diagnostics: Arc<Diagnostics>,
 ) {
     match generate_final_file_to_test(file_to_test, include_contents) {
-        Ok(file_to_run) => match spawn_v8_process(file_to_run) {
-            Some(_) => {
+        Ok(file_to_run) => match spawn_v8_process(file_to_test, file_to_run) {
+            None => {
                 diagnostics.run.fetch_add(1, Ordering::Relaxed);
                 diagnostics.passed.fetch_add(1, Ordering::Relaxed);
                 println!("{} {:?}", "Great Success".green(), file_to_test);
             }
-            None => {
+            Some(e) => {
                 diagnostics.run.fetch_add(1, Ordering::Relaxed);
                 diagnostics.failed.fetch_add(1, Ordering::Relaxed);
                 eprintln!("{} {:?}", "FAIL".red(), file_to_test);
+                eprintln!("{}", e);
             }
         },
         Err(e) => eprintln!(
@@ -132,19 +134,47 @@ fn generate_final_file_to_test(file_to_test: &PathBuf, mut contents: String) -> 
     Ok(contents)
 }
 
-pub fn spawn_v8_process(contents: String) -> Option<()> {
+pub fn spawn_v8_process(file: &PathBuf, js_source: String) -> Option<JsError> {
     let isolate = &mut v8::Isolate::new(Default::default());
 
     let scope = &mut v8::HandleScope::new(isolate);
     let context = v8::Context::new(scope);
     let scope = &mut v8::ContextScope::new(scope, context);
 
-    let code = v8::String::new(scope, &contents).unwrap();
+    let source = v8::String::new(scope, &js_source).unwrap();
 
-    let script = v8::Script::compile(scope, code, None)?;
-    let _result = script.run(scope)?;
+    let origin = v8::ScriptOrigin::new(
+        v8::String::new(scope, file.to_str().unwrap())
+            .unwrap()
+            .into(),
+        v8::Integer::new(scope, 0),
+        v8::Integer::new(scope, 0),
+        v8::Boolean::new(scope, false),
+        v8::Integer::new(scope, 123),
+        v8::String::new(scope, "").unwrap().into(),
+        v8::Boolean::new(scope, true),
+        v8::Boolean::new(scope, false),
+        v8::Boolean::new(scope, false),
+    );
 
-    Some(())
+    let tc_scope = &mut v8::TryCatch::new(scope);
+
+    let script = match v8::Script::compile(tc_scope, source, Some(&origin)) {
+        Some(script) => script,
+        None => {
+            let exception = tc_scope.exception().unwrap();
+            return Some(JsError::from_v8_exception(tc_scope, exception));
+        }
+    };
+
+    match script.run(tc_scope) {
+        Some(_) => None,
+        None => {
+            assert!(tc_scope.has_caught());
+            let exception = tc_scope.exception().unwrap();
+            return Some(JsError::from_v8_exception(tc_scope, exception));
+        }
+    }
 }
 
 pub fn run_all(test_path: PathBuf, include_path: PathBuf) -> Result<()> {
@@ -186,7 +216,10 @@ pub fn run_all(test_path: PathBuf, include_path: PathBuf) -> Result<()> {
                         }
                     }
                 },
-                Err(e) => eprintln!("Could not get serde value from frontmatter | Err: {}", e),
+                Err(e) => eprintln!(
+                    "Could not get serde value from frontmatter in file {:?} | Err: {}",
+                    file, e
+                ),
             },
             None => {
                 diagnostics.no_frontmatter.fetch_add(1, Ordering::Relaxed);
