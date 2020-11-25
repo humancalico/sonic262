@@ -1,7 +1,6 @@
 use color_eyre::eyre::Result;
 // TODO use a color library with no runtime dependency like yansi
 use colored::Colorize;
-use dashmap::DashMap;
 use deno_core::error::JsError;
 use jwalk::WalkDir;
 use rayon::prelude::*;
@@ -12,6 +11,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 #[derive(Debug)]
 pub struct Diagnostics {
@@ -97,28 +97,31 @@ pub fn get_serde_value(frontmatter_str: &str) -> serde_yaml::Result<serde_yaml::
 }
 
 pub fn get_contents(
-    includes_map: &DashMap<String, String>,
+    includes_map_r: evmap::ReadHandle<String, String>,
+    includes_map_w: Arc<Mutex<evmap::WriteHandle<String, String>>>,
     includes_value: &serde_yaml::Value,
     include_path_root: &PathBuf,
 ) -> Result<String> {
     let mut includes: Vec<String> = vec!["assert".to_string(), "sta".to_string()];
     includes.append(&mut serde_yaml::from_value(includes_value.clone())?);
     let includes_clone = includes.clone();
+    let mut w = includes_map_w.lock().unwrap();
     for include in includes {
         let include_clone = include.clone();
-        if !(includes_map.contains_key(&include)) {
+        if !(w.contains_key(&include)) {
             // read &include and store it in hashmap
-            includes_map.insert(
+            w.insert(
                 include,
                 fs::read_to_string(include_path_root.join(include_clone)).unwrap(),
             );
         }
     }
+    w.refresh();
     let mut contents = String::new();
     for include in includes_clone {
-        match includes_map.get(&include) {
+        match includes_map_r.get(&include) {
             Some(includes_value) => {
-                contents.push_str(&*includes_value);
+                contents.push_str(&*includes_value.get_one().unwrap());
                 contents.push('\n');
             }
             None => eprintln!("This should not have happened :|"),
@@ -172,7 +175,7 @@ pub fn spawn_v8_process(file: &PathBuf, js_source: String) -> Option<JsError> {
         None => {
             assert!(tc_scope.has_caught());
             let exception = tc_scope.exception().unwrap();
-            return Some(JsError::from_v8_exception(tc_scope, exception));
+            Some(JsError::from_v8_exception(tc_scope, exception))
         }
     }
 }
@@ -182,50 +185,67 @@ pub fn run_all(test_path: PathBuf, include_path: PathBuf) -> Result<()> {
     v8::V8::initialize_platform(platform);
     v8::V8::initialize();
 
-    let includes_map: DashMap<String, String> = DashMap::new();
-    includes_map.insert(
-        "assert".to_string(),
-        fs::read_to_string(include_path.join("assert.js"))?,
-    );
-    includes_map.insert(
-        "sta".to_string(),
-        fs::read_to_string(include_path.join("sta.js"))?,
-    );
+    let (includes_map_r, includes_map_w) = evmap::new();
+    let w = Arc::new(Mutex::new(includes_map_w));
+    {
+        let mut w = w.lock().unwrap();
+        w.insert(
+            "assert".to_string(),
+            fs::read_to_string(include_path.join("assert.js"))?,
+        );
+        w.insert(
+            "sta".to_string(),
+            fs::read_to_string(include_path.join("sta.js"))?,
+        );
+        w.refresh();
+    }
 
     let files_to_test = walk(test_path)?;
     let diagnostics = Arc::new(Diagnostics::new());
-    files_to_test.into_par_iter().for_each(|file| {
-        let frontmatter = extract_frontmatter(&file);
-        match frontmatter {
-            Some(f) => match get_serde_value(&f) {
-                Ok(frontmatter_value) => match frontmatter_value.get("includes") {
-                    Some(includes_value) => {
-                        match get_contents(&includes_map, includes_value, &include_path) {
-                            Ok(include_contents) => {
-                                generate_and_run(&file, include_contents, diagnostics.clone())
+    files_to_test
+        .into_par_iter()
+        .for_each_with(includes_map_r, |includes_map_r, file| {
+            let frontmatter = extract_frontmatter(&file);
+            match frontmatter {
+                Some(f) => match get_serde_value(&f) {
+                    Ok(frontmatter_value) => match frontmatter_value.get("includes") {
+                        Some(includes_value) => {
+                            match get_contents(
+                                includes_map_r.clone(),
+                                w.clone(),
+                                includes_value,
+                                &include_path,
+                            ) {
+                                Ok(include_contents) => {
+                                    generate_and_run(&file, include_contents, diagnostics.clone())
+                                }
+                                Err(e) => eprintln!("Not able to find {:?} | Err: {}", file, e),
                             }
-                            Err(e) => eprintln!("Not able to find {:?} | Err: {}", file, e),
                         }
-                    }
-                    None => {
-                        match get_contents(&includes_map, &Sequence([].to_vec()), &include_path) {
-                            Ok(include_contents) => {
-                                generate_and_run(&file, include_contents, diagnostics.clone())
+                        None => {
+                            match get_contents(
+                                includes_map_r.clone(),
+                                w.clone(),
+                                &Sequence([].to_vec()),
+                                &include_path,
+                            ) {
+                                Ok(include_contents) => {
+                                    generate_and_run(&file, include_contents, diagnostics.clone())
+                                }
+                                Err(e) => eprintln!("Not able to find {:?} | Err: {}", file, e),
                             }
-                            Err(e) => eprintln!("Not able to find {:?} | Err: {}", file, e),
                         }
-                    }
+                    },
+                    Err(e) => eprintln!(
+                        "Could not get serde value from frontmatter in file {:?} | Err: {}",
+                        file, e
+                    ),
                 },
-                Err(e) => eprintln!(
-                    "Could not get serde value from frontmatter in file {:?} | Err: {}",
-                    file, e
-                ),
-            },
-            None => {
-                diagnostics.no_frontmatter.fetch_add(1, Ordering::Relaxed);
+                None => {
+                    diagnostics.no_frontmatter.fetch_add(1, Ordering::Relaxed);
+                }
             }
-        }
-    });
+        });
     println!(
         "TOTAL: {}, FAILED: {}, PASSED: {}, NO FRONTMATTER: {}",
         diagnostics.run.load(Ordering::Relaxed).to_string().yellow(),
