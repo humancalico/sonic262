@@ -1,6 +1,7 @@
+mod reporter;
+
 use color_eyre::eyre::Result;
 // TODO use a color library with no runtime dependency like yansi
-use colored::Colorize;
 use deno_core::error::JsError;
 use jwalk::WalkDir;
 use rayon::prelude::*;
@@ -8,31 +9,10 @@ use rusty_v8 as v8;
 use serde_yaml::Value::Sequence;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicU32;
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::sync::Mutex;
-
-#[derive(Debug)]
-pub struct Diagnostics {
-    total_files: AtomicU32,
-    run: AtomicU32,
-    passed: AtomicU32,
-    failed: AtomicU32,
-    no_frontmatter: AtomicU32,
-}
-
-impl Diagnostics {
-    fn new() -> Self {
-        Self {
-            total_files: AtomicU32::new(0),
-            run: AtomicU32::new(0),
-            passed: AtomicU32::new(0),
-            failed: AtomicU32::new(0),
-            no_frontmatter: AtomicU32::new(0),
-        }
-    }
-}
+use std::sync::atomic::Ordering;
+use reporter::Diagnostics;
 
 // TODO get rid of this function. This is just a match wrapper around generate_final_file_to_test
 pub fn generate_and_run(
@@ -42,17 +22,8 @@ pub fn generate_and_run(
 ) {
     match generate_final_file_to_test(file_to_test, include_contents) {
         Ok(file_to_run) => match spawn_v8_process(file_to_test, file_to_run) {
-            None => {
-                diagnostics.run.fetch_add(1, Ordering::Relaxed);
-                diagnostics.passed.fetch_add(1, Ordering::Relaxed);
-                println!("{} {:?}", "Great Success".green(), file_to_test);
-            }
-            Some(e) => {
-                diagnostics.run.fetch_add(1, Ordering::Relaxed);
-                diagnostics.failed.fetch_add(1, Ordering::Relaxed);
-                eprintln!("{} {:?}", "FAIL".red(), file_to_test);
-                eprintln!("{}", e);
-            }
+            None => reporter::pass(diagnostics, file_to_test),
+            Some(e) => reporter::fail(diagnostics, file_to_test, e),
         },
         Err(e) => eprintln!(
             "Couldn't generate file: {:?} to test | Err: {}",
@@ -242,25 +213,15 @@ pub fn run_all(test_path: PathBuf, include_path: PathBuf) -> Result<()> {
                     ),
                 },
                 None => {
-                    diagnostics.no_frontmatter.fetch_add(1, Ordering::Relaxed);
+                    // FIXME This doesn't seem to work as intended
+                    if file.ends_with("FIXTURE.js") {
+                    } else {
+                        diagnostics.invalid.fetch_add(1, Ordering::Relaxed);
+                    }
                 }
             }
         });
-    println!(
-        "TOTAL: {}, FAILED: {}, PASSED: {}, NO FRONTMATTER: {}",
-        diagnostics.run.load(Ordering::Relaxed).to_string().yellow(),
-        diagnostics.failed.load(Ordering::Relaxed).to_string().red(),
-        diagnostics
-            .passed
-            .load(Ordering::Relaxed)
-            .to_string()
-            .green(),
-        diagnostics
-            .no_frontmatter
-            .load(Ordering::Relaxed)
-            .to_string()
-            .cyan(),
-    );
+    reporter::final_results(diagnostics);
     Ok(())
 }
 
