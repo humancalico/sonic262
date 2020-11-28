@@ -1,29 +1,17 @@
 use colored::Colorize;
 use deno_core::error::JsError;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU32;
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Diagnostics {
     pub total_files: AtomicU32,
     pub run: AtomicU32,
     pub passed: AtomicU32,
     pub failed: AtomicU32,
     pub invalid: AtomicU32,
-}
-
-impl Diagnostics {
-    pub fn new() -> Self {
-        Self {
-            total_files: AtomicU32::new(0),
-            run: AtomicU32::new(0),
-            passed: AtomicU32::new(0),
-            failed: AtomicU32::new(0),
-            invalid: AtomicU32::new(0),
-        }
-    }
 }
 
 // This is to be called when a test is successful

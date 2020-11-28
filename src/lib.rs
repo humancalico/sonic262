@@ -2,17 +2,18 @@ mod reporter;
 
 use color_eyre::eyre::Result;
 // TODO use a color library with no runtime dependency like yansi
+use dashmap::DashMap;
 use deno_core::error::JsError;
 use jwalk::WalkDir;
 use rayon::prelude::*;
+use reporter::Diagnostics;
 use rusty_v8 as v8;
 use serde_yaml::Value::Sequence;
+use smartstring::alias::String;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::Mutex;
 use std::sync::atomic::Ordering;
-use reporter::Diagnostics;
+use std::sync::Arc;
 
 // TODO get rid of this function. This is just a match wrapper around generate_final_file_to_test
 pub fn generate_and_run(
@@ -52,7 +53,7 @@ pub fn extract_frontmatter(file_to_test: &PathBuf) -> Option<String> {
         let yaml_end = file_contents.find("---*/");
         if let Some(end) = yaml_end {
             // TODO remove unwrap here
-            Some(file_contents.get(start + 5..end).unwrap().to_string())
+            Some(String::from(file_contents.get(start + 5..end).unwrap()))
         } else {
             eprintln!("This file has an invalid frontmatter");
             None
@@ -68,31 +69,30 @@ pub fn get_serde_value(frontmatter_str: &str) -> serde_yaml::Result<serde_yaml::
 }
 
 pub fn get_contents(
-    includes_map_r: evmap::ReadHandle<String, String>,
-    includes_map_w: Arc<Mutex<evmap::WriteHandle<String, String>>>,
+    includes_map: &DashMap<String, String>,
     includes_value: &serde_yaml::Value,
     include_path_root: &PathBuf,
 ) -> Result<String> {
-    let mut includes: Vec<String> = vec!["assert".to_string(), "sta".to_string()];
+    let mut includes: Vec<String> = vec![String::from("assert"), String::from("sta")];
     includes.append(&mut serde_yaml::from_value(includes_value.clone())?);
     let includes_clone = includes.clone();
-    let mut w = includes_map_w.lock().unwrap();
     for include in includes {
         let include_clone = include.clone();
-        if !(w.contains_key(&include)) {
+        if !(includes_map.contains_key(&include)) {
             // read &include and store it in hashmap
-            w.insert(
+            includes_map.insert(
                 include,
-                fs::read_to_string(include_path_root.join(include_clone)).unwrap(),
+                String::from(
+                    fs::read_to_string(include_path_root.join(include_clone.to_string())).unwrap(),
+                ),
             );
         }
     }
-    w.refresh();
     let mut contents = String::new();
     for include in includes_clone {
-        match includes_map_r.get(&include) {
+        match includes_map.get(&include) {
             Some(includes_value) => {
-                contents.push_str(&*includes_value.get_one().unwrap());
+                contents.push_str(&*includes_value);
                 contents.push('\n');
             }
             None => eprintln!("This should not have happened :|"),
@@ -156,71 +156,54 @@ pub fn run_all(test_path: PathBuf, include_path: PathBuf) -> Result<()> {
     v8::V8::initialize_platform(platform);
     v8::V8::initialize();
 
-    let (includes_map_r, includes_map_w) = evmap::new();
-    let w = Arc::new(Mutex::new(includes_map_w));
-    {
-        let mut w = w.lock().unwrap();
-        w.insert(
-            "assert".to_string(),
-            fs::read_to_string(include_path.join("assert.js"))?,
-        );
-        w.insert(
-            "sta".to_string(),
-            fs::read_to_string(include_path.join("sta.js"))?,
-        );
-        w.refresh();
-    }
+    let includes_map: DashMap<String, String> = DashMap::new();
+    includes_map.insert(
+        String::from("assert"),
+        String::from(fs::read_to_string(include_path.join("assert.js"))?),
+    );
+    includes_map.insert(
+        String::from("sta"),
+        String::from(fs::read_to_string(include_path.join("sta.js"))?),
+    );
 
     let files_to_test = walk(test_path)?;
-    let diagnostics = Arc::new(Diagnostics::new());
-    files_to_test
-        .into_par_iter()
-        .for_each_with(includes_map_r, |includes_map_r, file| {
-            let frontmatter = extract_frontmatter(&file);
-            match frontmatter {
-                Some(f) => match get_serde_value(&f) {
-                    Ok(frontmatter_value) => match frontmatter_value.get("includes") {
-                        Some(includes_value) => {
-                            match get_contents(
-                                includes_map_r.clone(),
-                                w.clone(),
-                                includes_value,
-                                &include_path,
-                            ) {
-                                Ok(include_contents) => {
-                                    generate_and_run(&file, include_contents, diagnostics.clone())
-                                }
-                                Err(e) => eprintln!("Not able to find {:?} | Err: {}", file, e),
+    let diagnostics = Arc::new(Diagnostics::default());
+    files_to_test.into_par_iter().for_each(|file| {
+        let frontmatter = extract_frontmatter(&file);
+        match frontmatter {
+            Some(f) => match get_serde_value(&f) {
+                Ok(frontmatter_value) => match frontmatter_value.get("includes") {
+                    Some(includes_value) => {
+                        match get_contents(&includes_map, includes_value, &include_path) {
+                            Ok(include_contents) => {
+                                generate_and_run(&file, include_contents, diagnostics.clone())
                             }
+                            Err(e) => eprintln!("Not able to find {:?} | Err: {}", file, e),
                         }
-                        None => {
-                            match get_contents(
-                                includes_map_r.clone(),
-                                w.clone(),
-                                &Sequence([].to_vec()),
-                                &include_path,
-                            ) {
-                                Ok(include_contents) => {
-                                    generate_and_run(&file, include_contents, diagnostics.clone())
-                                }
-                                Err(e) => eprintln!("Not able to find {:?} | Err: {}", file, e),
-                            }
-                        }
-                    },
-                    Err(e) => eprintln!(
-                        "Could not get serde value from frontmatter in file {:?} | Err: {}",
-                        file, e
-                    ),
-                },
-                None => {
-                    // FIXME This doesn't seem to work as intended
-                    if file.ends_with("FIXTURE.js") {
-                    } else {
-                        diagnostics.invalid.fetch_add(1, Ordering::Relaxed);
                     }
+                    None => {
+                        match get_contents(&includes_map, &Sequence([].to_vec()), &include_path) {
+                            Ok(include_contents) => {
+                                generate_and_run(&file, include_contents, diagnostics.clone())
+                            }
+                            Err(e) => eprintln!("Not able to find {:?} | Err: {}", file, e),
+                        }
+                    }
+                },
+                Err(e) => eprintln!(
+                    "Could not get serde value from frontmatter in file {:?} | Err: {}",
+                    file, e
+                ),
+            },
+            None => {
+                // FIXME This doesn't seem to work as intended
+                if file.ends_with("FIXTURE.js") {
+                } else {
+                    diagnostics.invalid.fetch_add(1, Ordering::Relaxed);
                 }
             }
-        });
+        }
+    });
     reporter::final_results(diagnostics);
     Ok(())
 }
