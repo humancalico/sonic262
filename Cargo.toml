@@ -12,7 +12,7 @@ serde_yaml = "0.8.13"
 colored = "2.0.0"
 rayon = "1.5.0"
 color-eyre = "0.5.7"
-rusty_v8 = "0.13.0"
+rusty_v8 = "0.14.0"
 deno_core = "0.69.0"
 jwalk = "0.5.1"
 smartstring = { version = "0.2.5", features = [ "serde" ] }
