@@ -437,9 +437,9 @@ dependencies = [
 
 [[package]]
 name = "deno_core"
-version = "0.69.0"
+version = "0.74.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "548a5b3f73cc2880fe504e36b89f672206373cdc5b592698d93d10e187ba4d53"
+checksum = "42ff980f1784abde4c6f0bb383c7bcb443ac8d4d518ea5c64916f8b024af2cdb"
 dependencies = [
  "anyhow",
  "futures",
@@ -447,7 +447,8 @@ dependencies = [
  "lazy_static",
  "libc",
  "log",
- "rusty_v8",
+ "pin-project",
+ "rusty_v8 0.14.0",
  "serde",
  "serde_json",
  "smallvec",
@@ -1010,6 +1011,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "rusty_v8"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6bdaa4aeeae3253c3b34486af66527d9982105d79ba57cf9b50b217e7b47a8b6"
+dependencies = [
+ "bitflags",
+ "cargo_gn",
+ "lazy_static",
+ "libc",
+ "which",
+]
+
+[[package]]
 name = "ryu"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1149,7 +1163,7 @@ dependencies = [
  "deno_core",
  "jwalk",
  "rayon",
- "rusty_v8",
+ "rusty_v8 0.13.0",
  "serde_yaml",
  "smartstring",
  "static_assertions",
