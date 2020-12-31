@@ -13,7 +13,7 @@ colored = "2.0.0"
 rayon = "1.5.0"
 color-eyre = "0.5.7"
 rusty_v8 = "0.13.0"
-deno_core = "0.69.0"
+deno_core = "0.75.0"
 jwalk = "0.5.1"
 smartstring = { version = "0.2.5", features = [ "serde" ] }
 dashmap = "3.11.10"
