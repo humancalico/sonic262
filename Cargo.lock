@@ -447,7 +447,7 @@ dependencies = [
  "lazy_static",
  "libc",
  "log",
- "rusty_v8",
+ "rusty_v8 0.13.0",
  "serde",
  "serde_json",
  "smallvec",
@@ -484,6 +484,16 @@ checksum = "ece68d15c92e84fa4f19d3780f1294e5ca82a78a6d515f1efaabcc144688be00"
 dependencies = [
  "matches",
  "percent-encoding",
+]
+
+[[package]]
+name = "fslock"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b14c83e47c73f7d62d907ae24a1a98e9132df3c33eb6c54fcf4bce0dbc41d5af"
+dependencies = [
+ "libc",
+ "winapi",
 ]
 
 [[package]]
@@ -1010,6 +1020,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "rusty_v8"
+version = "0.21.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "44bcf83fc222cc6caf4404414eae397c910e2f1ee31f291024434ae5cc312918"
+dependencies = [
+ "bitflags",
+ "fslock",
+ "lazy_static",
+ "libc",
+ "which",
+]
+
+[[package]]
 name = "ryu"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1149,7 +1172,7 @@ dependencies = [
  "deno_core",
  "jwalk",
  "rayon",
- "rusty_v8",
+ "rusty_v8 0.21.0",
  "serde_yaml",
  "smartstring",
  "static_assertions",
