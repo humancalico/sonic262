@@ -1,0 +1,22 @@
+version: 2
+updates:
+- package-ecosystem: cargo
+  directory: "/"
+  schedule:
+    interval: daily
+  open-pull-requests-limit: 10
+  ignore:
+  - dependency-name: rusty_v8
+    versions:
+    - 0.16.0
+    - 0.17.0
+    - 0.18.2
+    - 0.19.0
+    - 0.20.0
+  - dependency-name: serde_yaml
+    versions:
+    - 0.8.15
+    - 0.8.16
+  - dependency-name: color-eyre
+    versions:
+    - 0.5.10
